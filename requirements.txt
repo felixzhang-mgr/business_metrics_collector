@@ -1,0 +1,28 @@
+# Oracle Metrics Collector Requirements
+# 
+# 安装命令: pip install -r requirements.txt
+# 或使用pip3: pip3 install -r requirements.txt
+#
+# Python版本要求: Python 3.7+
+# 测试环境: Python 3.9.24 on Amazon Linux 2023
+
+# AWS CloudWatch SDK
+# 注意：Amazon Linux 2023通常已预装boto3，但建议使用pip安装以确保版本兼容
+boto3>=1.26.0
+
+# Oracle数据库连接库（二选一）
+# 推荐使用 oracledb（Oracle官方新库，Python 3.7+）
+# 注意：需要先安装Oracle Instant Client
+# Amazon Linux 2023安装Oracle Instant Client:
+#   sudo dnf install -y oracle-instantclient-release-el8
+#   sudo dnf install -y oracle-instantclient-basic oracle-instantclient-sqlplus
+oracledb>=1.4.0
+# 或者使用 cx_Oracle（旧版本兼容，如果oracledb不可用）
+# cx_Oracle>=8.3.0
+
+# Cron表达式解析
+croniter>=1.3.0
+
+# YAML配置文件解析
+PyYAML>=6.0
+

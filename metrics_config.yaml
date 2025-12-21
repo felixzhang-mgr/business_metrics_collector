@@ -1,0 +1,175 @@
+# Oracle指标采集配置文件
+
+# 数据库连接配置
+# 注意：数据库连接信息（username, password, host, port, service_name）必须通过环境变量设置
+# 请在运行前设置以下环境变量：
+#   ORACLE_USERNAME, ORACLE_PASSWORD, ORACLE_HOST, ORACLE_PORT, ORACLE_SERVICE
+database:
+  max_connections: 10  # 最大连接数
+  default_query_timeout: 30.0  # 默认查询超时时间（秒）
+
+# 公共维度（所有指标共享）
+common_dimensions:
+  - Name: team
+    Value: maintenance
+  - Name: InstanceId
+    Value: i-00c75580acea9167d
+
+# 指标配置列表
+metrics:
+  # EC2OracleAlive指标：检查数据库存活性
+  - metric_name: EC2OracleAlive
+    sql_query: SELECT 1 FROM DUAL
+    namespace: Paytend_Production
+    dimensions: 
+      - Name: InstanceId
+        Value: i-00c75580acea9167d
+    converter:
+      type: simple
+      func: "lambda x: 1.0 if x is not None else 0.0"
+    unit: None
+    cron: "*/1 * * * *"  # 每分钟执行一次
+    # query_timeout: 10  # 查询超时时间（秒），可选，不设置则使用默认值30秒
+
+  # 示例：简单指标（直接使用SQL查询结果）
+  # - metric_name: OracleActiveConnections
+  #   sql_query: SELECT COUNT(*) FROM v$session WHERE status = 'ACTIVE'
+  #   namespace: Paytend_Production
+  #   dimensions: [] # 使用公共维度
+  #   converter: null
+  #   unit: Count
+  #   cron: "*/5 * * * *"  # 每5分钟执行一次
+  #   query_timeout: 15  # 此查询最多等待15秒
+
+  # 示例：使用平均值转换器
+  # - metric_name: OracleAvgResponseTime
+  #   sql_query: SELECT AVG(response_time) FROM performance_log
+  #   namespace: Paytend_Production
+  #   dimensions: []
+  #   converter:
+  #     type: avg
+  #     max_history_size: 10
+  #   unit: Milliseconds
+  #   cron: "*/2 * * * *"  # 每2分钟执行一次
+
+  # 示例：使用速率转换器
+  # - metric_name: OracleTransactionRate
+  #   sql_query: SELECT transaction_count FROM stats_table
+  #   namespace: Paytend_Production
+  #   dimensions: []
+  #   converter:
+  #     type: rate
+  #   unit: Count/Second
+  #   cron: "*/1 * * * *"  # 每分钟执行一次
+
+  # 示例：使用增量转换器
+  # - metric_name: OracleTotalTransactions
+  #   sql_query: SELECT transaction_count FROM stats_table
+  #   namespace: Paytend_Production
+  #   dimensions: []
+  #   converter:
+  #     type: increase
+  #   unit: Count
+  #   cron: "*/1 * * * *"  # 每分钟执行一次
+
+  # 示例：使用最大值转换器
+  # - metric_name: OracleMaxConnections
+  #   sql_query: SELECT current_connections FROM stats_table
+  #   namespace: Paytend_Production
+  #   dimensions: []
+  #   converter:
+  #     type: max
+  #     max_history_size: 60
+  #   unit: Count
+  #   cron: "0 * * * *"  # 每小时执行一次
+
+  # 示例：复杂SQL查询 - 多表JOIN
+  # - metric_name: OracleComplexQuery
+  #   sql_query: |
+  #     SELECT 
+  #       COUNT(DISTINCT s.sid) as active_sessions,
+  #       SUM(CASE WHEN s.status = 'ACTIVE' THEN 1 ELSE 0 END) as active_count
+  #     FROM v$session s
+  #     JOIN v$process p ON s.paddr = p.addr
+  #     WHERE s.username IS NOT NULL
+  #       AND s.type = 'USER'
+  #   namespace: Paytend_Production
+  #   dimensions: []
+  #   converter: null
+  #   unit: Count
+  #   cron: "*/5 * * * *"  # 每5分钟执行一次
+  #   query_timeout: 30
+
+  # 示例：复杂SQL查询 - 子查询和聚合
+  # - metric_name: OracleTableSpaceUsage
+  #   sql_query: |
+  #     SELECT 
+  #       ROUND(
+  #         (SELECT SUM(bytes) FROM dba_data_files WHERE tablespace_name = 'USERS') / 
+  #         (SELECT SUM(bytes) FROM dba_data_files WHERE tablespace_name = 'USERS') * 100,
+  #         2
+  #       ) as usage_percent
+  #     FROM dual
+  #   namespace: Paytend_Production
+  #   dimensions: []
+  #   converter: null
+  #   unit: Percent
+  #   cron: "*/10 * * * *"  # 每10分钟执行一次
+
+  # 示例：复杂SQL查询 - 窗口函数
+  # - metric_name: OracleTopWaitEvents
+  #   sql_query: |
+  #     SELECT 
+  #       event,
+  #       total_waits,
+  #       time_waited
+  #     FROM (
+  #       SELECT 
+  #         event,
+  #         total_waits,
+  #         time_waited,
+  #         ROW_NUMBER() OVER (ORDER BY time_waited DESC) as rn
+  #       FROM v$system_event
+  #       WHERE wait_class != 'Idle'
+  #     )
+  #     WHERE rn = 1
+  #   namespace: Paytend_Production
+  #   dimensions: []
+  #   converter: null
+  #   unit: Count
+  #   cron: "*/15 * * * *"  # 每15分钟执行一次
+
+  # 示例：复杂SQL查询 - CASE WHEN条件判断
+  # - metric_name: OracleDatabaseStatus
+  #   sql_query: |
+  #     SELECT 
+  #       CASE 
+  #         WHEN open_mode = 'READ WRITE' THEN 1
+  #         WHEN open_mode = 'READ ONLY' THEN 0.5
+  #         ELSE 0
+  #       END as status_value
+  #     FROM v$database
+  #   namespace: Paytend_Production
+  #   dimensions: []
+  #   converter: null
+  #   unit: None
+  #   cron: "*/1 * * * *"  # 每分钟执行一次
+
+  # 示例：复杂SQL查询 - 多条件WHERE和GROUP BY
+  # - metric_name: OracleSessionByStatus
+  #   sql_query: |
+  #     SELECT 
+  #       status,
+  #       COUNT(*) as session_count
+  #     FROM v$session
+  #     WHERE username IS NOT NULL
+  #       AND type = 'USER'
+  #       AND status IN ('ACTIVE', 'INACTIVE')
+  #     GROUP BY status
+  #     HAVING COUNT(*) > 0
+  #   namespace: Paytend_Production
+  #   dimensions: []
+  #   converter: null
+  #   unit: Count
+  #   cron: "*/3 * * * *"  # 每3分钟执行一次
+  #   query_timeout: 20
