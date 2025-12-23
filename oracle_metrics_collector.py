@@ -962,8 +962,9 @@ def run_single_metric_scheduler(
         while True:
             # 获取当前时间
             current_time = datetime.now()
-            # 获取下次执行时间
-            next_time = cron.get_next(current_time)
+            # 设置当前时间并获取下次执行时间
+            cron.set_current(current_time)
+            next_time = cron.get_next(datetime)
             
             # 计算需要等待的秒数
             wait_seconds = (next_time - current_time).total_seconds()
