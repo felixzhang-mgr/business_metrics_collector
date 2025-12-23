@@ -29,6 +29,45 @@ metrics:
     cron: "*/1 * * * *"  # 每分钟执行一次
     # query_timeout: 10  # 查询超时时间（秒），可选，不设置则使用默认值30秒
 
+  # 每小时卡授权交易笔数（固定窗口）：每小时整点执行，统计上一个完整小时的交易笔数
+  - metric_name: HourlyTransactionCount
+    sql_query: |
+      SELECT COUNT(*) 
+      FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
+      WHERE CREATETIME >= TRUNC(SYSDATE, 'HH24') - INTERVAL '1' HOUR
+        AND CREATETIME < TRUNC(SYSDATE, 'HH24')
+    namespace: Paytend_Production
+    dimensions: 
+      - Name: team
+        Value: Paytend
+      - Name: business
+        Value: TribeCardAuthorization
+    converter:
+      max_history_size: 1
+    unit: TPH  # Transactions Per Hour
+    cron: "0 * * * *"  # 每小时整点执行一次
+    # query_timeout: 30  # 查询超时时间（秒），可选
+
+  # 超时卡授权交易监控（滑动窗口）：每5分钟执行一次，查询过去1小时的超时交易数，用于实时告警
+  - metric_name: TimeoutTransactionCount
+    sql_query: |
+      SELECT COUNT(*) 
+      FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
+      WHERE RESPONSECODE = '05' 
+        AND NOTE = 'TAI request timeout' 
+        AND CREATETIME >= SYSDATE - INTERVAL '60' MINUTE
+    namespace: Paytend_Production
+    dimensions: 
+      - Name: team
+        Value: Paytend
+      - Name: business
+        Value: TribeCardAuthorization
+    converter: null
+    unit: Count
+    cron: "*/5 * * * *"  # 每5分钟执行一次，用于及时告警
+    # query_timeout: 30  # 查询超时时间（秒），可选
+    # 告警建议：在Grafana中设置告警规则，当值 > 5 时触发告警
+
   # 示例：简单指标（直接使用SQL查询结果）
   # - metric_name: OracleActiveConnections
   #   sql_query: SELECT COUNT(*) FROM v$session WHERE status = 'ACTIVE'

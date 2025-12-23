@@ -167,7 +167,8 @@ class SimpleConverter(MetricValueConverter):
     
     def convert(self, raw_value: Optional[float], timestamp: datetime) -> Optional[float]:
         if raw_value is None:
-            return None
+            # 保持与原来None处理逻辑一致：返回0.0而不是None
+            return 0.0
         
         value = float(raw_value)
         if self.converter_func:
@@ -643,13 +644,14 @@ def create_converter_from_config(converter_config: Optional[Dict]) -> Optional[A
     根据配置创建转换器实例
     
     Args:
-        converter_config: 转换器配置字典
+        converter_config: 转换器配置字典，如果为None则返回默认的SimpleConverter
         
     Returns:
-        转换器实例，如果配置为None则返回None
+        转换器实例，如果配置为None则返回SimpleConverter（默认行为）
     """
     if converter_config is None:
-        return None
+        # 默认使用SimpleConverter（MetricValueConverter的子类）
+        return SimpleConverter()
     
     converter_type = converter_config.get('type', 'simple')
     max_history_size = converter_config.get('max_history_size', 100)
@@ -666,8 +668,10 @@ def create_converter_from_config(converter_config: Optional[Dict]) -> Optional[A
             except Exception:
                 if logger:
                     logger.warning(f"转换器函数解析失败: {func_str}")
-                return None
-        return None
+                # 函数解析失败时，返回默认的SimpleConverter
+                return SimpleConverter()
+        # 没有提供func时，返回默认的SimpleConverter
+        return SimpleConverter()
     elif converter_type == 'avg':
         return AvgConverter(max_history_size=max_history_size)
     elif converter_type == 'max':
