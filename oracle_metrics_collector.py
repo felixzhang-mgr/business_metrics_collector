@@ -598,7 +598,7 @@ class CloudWatchMetrics:
         """
         初始化CloudWatch客户端
         """
-        self.cloudwatch = boto3.client('cloudwatch', region_name='us-central-1')
+        self.cloudwatch = boto3.client('cloudwatch', region_name='eu-central-1')
     
     def send_metric(
         self,
