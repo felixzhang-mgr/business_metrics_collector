@@ -44,7 +44,7 @@ metrics:
         Value: TribeCardAuthorization
     converter:
       max_history_size: 1
-    unit: TPH  # Transactions Per Hour
+    unit: Count  # Transactions Per Hour
     cron: "0 * * * *"  # 每小时整点执行一次
     # query_timeout: 30  # 查询超时时间（秒），可选
 
@@ -62,7 +62,8 @@ metrics:
         Value: Paytend
       - Name: business
         Value: TribeCardAuthorization
-    converter: null
+    converter:
+      max_history_size: 1
     unit: Count
     cron: "*/5 * * * *"  # 每5分钟执行一次，用于及时告警
     # query_timeout: 30  # 查询超时时间（秒），可选
