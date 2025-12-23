@@ -29,11 +29,14 @@ PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
 echo "Python版本: $PYTHON_VERSION"
 
 # 验证Oracle Instant Client
-if ! ldconfig -p 2>/dev/null | grep -q oracle; then
-    echo "警告: 未检测到Oracle Instant Client库"
-    echo "如果已安装但未检测到，请确保LD_LIBRARY_PATH已正确设置"
+# 检查Oracle Instant Client动态库是否可访问（优先用LD_LIBRARY_PATH，其次用ldconfig）
+if [ -n "$LD_LIBRARY_PATH" ] && ls $LD_LIBRARY_PATH/libclntsh.so* 1>/dev/null 2>&1; then
+    echo "Oracle Instant Client已安装（通过LD_LIBRARY_PATH检测到）"
+elif ldconfig -p 2>/dev/null | grep -qi libclntsh; then
+    echo "Oracle Instant Client已安装（通过ldconfig检测到）"
 else
-    echo "Oracle Instant Client已安装"
+    echo "警告: 未检测到Oracle Instant Client库"
+    echo "如果已安装但未检测到，请确保LD_LIBRARY_PATH已正确设置，或者Oracle Instant Client库已正确安装"
 fi
 
 # 安装Python依赖
