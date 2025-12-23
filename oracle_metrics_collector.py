@@ -115,7 +115,7 @@ class MetricValueConverter:
     支持状态保持的复杂转换逻辑，如聚合函数
     """
     
-    def __init__(self, max_history_size: int = 100):
+    def __init__(self, max_history_size: int = 1):
         """
         初始化转换器
         
@@ -325,16 +325,18 @@ class MetricConfig:
         value_converter: Optional[Any] = None,
         unit: str = 'None',
         query_timeout: Optional[float] = None,
-        cron_expr: Optional[str] = None
+        cron_expr: Optional[str] = None,
+        multi_row: bool = False,
+        dynamic_dimensions: Optional[List[Dict[str, Any]]] = None
     ):
         """
         初始化指标配置
         
         Args:
             metric_name: CloudWatch指标名称
-            sql_query: 用于采集指标的SQL查询，应返回单个数值
+            sql_query: 用于采集指标的SQL查询，应返回单个数值（单行模式）或多行结果（多行模式）
             namespace: CloudWatch命名空间
-            dimensions: CloudWatch维度列表
+            dimensions: CloudWatch维度列表（静态维度）
             value_converter: 可选的值转换器，可以是：
                 - MetricValueConverter实例（支持聚合函数）
                 - Callable函数（简单转换）
@@ -342,6 +344,10 @@ class MetricConfig:
             unit: 指标单位（默认：'None'）
             query_timeout: 查询超时时间（秒），None表示使用默认值（30秒）
             cron_expr: Cron表达式，None表示使用默认值（*/1 * * * *，即每分钟）
+            multi_row: 是否支持多行结果，True时SQL查询应返回多行，每行会发送一个独立的指标
+            dynamic_dimensions: 动态维度配置列表，用于从查询结果中提取维度值
+                格式: [{"column": 0, "dimension_name": "ResponseCode"}, ...]
+                column可以是列索引（0-based）或列名
         """
         self.metric_name = metric_name
         self.sql_query = sql_query
@@ -351,6 +357,8 @@ class MetricConfig:
         self.unit = unit
         self.query_timeout = query_timeout
         self.cron_expr = cron_expr
+        self.multi_row = multi_row
+        self.dynamic_dimensions = dynamic_dimensions or []
 
 
 class OracleConnectionPool:
@@ -543,6 +551,82 @@ class OracleConnectionPool:
             if logger:
                 logger.error(f"查询执行异常: {e}, SQL: {sql_query[:100]}...")
             return None
+        finally:
+            # 清理资源并返回连接
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if connection:
+                self.return_connection(connection)
+    
+    def execute_query_multi(self, sql_query: str, timeout: Optional[float] = None) -> tuple:
+        """
+        执行SQL查询并返回多行结果（带超时保护，线程安全）
+        
+        Args:
+            sql_query: SQL查询语句，应返回多行结果
+            timeout: 查询超时时间（秒），None表示使用默认值
+            
+        Returns:
+            tuple: (results, column_names)
+                - results: List[tuple] 查询结果列表，每行是一个tuple
+                - column_names: List[str] 列名列表，如果查询失败返回空列表
+        """
+        if timeout is None:
+            timeout = self.default_query_timeout
+        
+        connection = None
+        cursor = None
+        
+        try:
+            # 从连接池获取连接
+            connection, is_valid = self.get_connection()
+            if not is_valid or connection is None:
+                if logger:
+                    logger.warning(f"无法获取数据库连接，查询失败: {sql_query[:50]}...")
+                return ([], [])
+            
+            def _execute_query():
+                """执行查询的内部函数"""
+                nonlocal cursor
+                try:
+                    cursor = connection.cursor()
+                    cursor.execute(sql_query)
+                    results = cursor.fetchall()
+                    # 获取列名
+                    column_names = []
+                    if cursor.description:
+                        column_names = [desc[0] for desc in cursor.description]
+                    return (results if results else [], column_names)
+                except Exception as e:
+                    if logger:
+                        logger.error(f"多行查询执行异常: {e}")
+                    return ([], [])
+            
+            # 使用ThreadPoolExecutor实现超时控制
+            query_start_time = time.time()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_execute_query)
+                try:
+                    results, column_names = future.result(timeout=timeout)
+                    query_duration = time.time() - query_start_time
+                    if logger:
+                        if query_duration > 1.0:
+                            logger.warning(f"慢查询检测: 耗时 {query_duration:.2f}秒, SQL: {sql_query[:100]}...")
+                        else:
+                            logger.debug(f"多行查询成功，返回 {len(results)} 行，耗时 {query_duration:.2f}秒")
+                    return (results, column_names)
+                except FutureTimeoutError:
+                    # 查询超时
+                    if logger:
+                        logger.warning(f"多行查询超时（{timeout}秒）: {sql_query[:100]}...")
+                    return ([], [])
+        except Exception as e:
+            if logger:
+                logger.error(f"多行查询执行异常: {e}, SQL: {sql_query[:100]}...")
+            return ([], [])
         finally:
             # 清理资源并返回连接
             if cursor:
@@ -801,6 +885,12 @@ def get_metric_configs(config_file: str = 'metrics_config.yaml') -> List[MetricC
         # 获取Cron表达式，None表示使用默认值（*/1 * * * *）
         cron_expr = metric.get('cron', '*/1 * * * *')
         
+        # 获取多行模式配置
+        multi_row = metric.get('multi_row', False)
+        
+        # 获取动态维度配置
+        dynamic_dimensions = metric.get('dynamic_dimensions', [])
+        
         # 创建指标配置
         config = MetricConfig(
             metric_name=metric['metric_name'],
@@ -810,7 +900,9 @@ def get_metric_configs(config_file: str = 'metrics_config.yaml') -> List[MetricC
             value_converter=converter,
             unit=metric.get('unit', 'None'),
             query_timeout=query_timeout,
-            cron_expr=cron_expr
+            cron_expr=cron_expr,
+            multi_row=multi_row,
+            dynamic_dimensions=dynamic_dimensions
         )
         configs.append(config)
     
@@ -860,6 +952,53 @@ def merge_metric_configs(
     return merged_configs
 
 
+def extract_dynamic_dimensions(row: tuple, dynamic_dimensions_config: List[Dict[str, Any]], column_names: Optional[List[str]] = None) -> List[Dict[str, str]]:
+    """
+    从查询结果行中提取动态维度
+    
+    Args:
+        row: 查询结果的一行（tuple）
+        dynamic_dimensions_config: 动态维度配置列表
+        column_names: 列名列表（用于列名查找），可选
+        
+    Returns:
+        List[Dict[str, str]]: 动态维度列表
+    """
+    dynamic_dims = []
+    
+    for dim_config in dynamic_dimensions_config:
+        column = dim_config.get('column')
+        dimension_name = dim_config.get('dimension_name')
+        
+        if dimension_name is None:
+            continue
+        
+        # 获取列值
+        column_value = None
+        if isinstance(column, int):
+            # 列索引（0-based）
+            if 0 <= column < len(row):
+                column_value = row[column]
+        elif isinstance(column, str) and column_names:
+            # 列名（需要列名列表）
+            try:
+                column_index = next(
+                    (i for i, name in enumerate(column_names) if name.upper() == column.upper()),
+                    None
+                )
+                if column_index is not None and column_index < len(row):
+                    column_value = row[column_index]
+            except Exception:
+                pass
+        
+        if column_value is not None:
+            # 转换为字符串
+            dim_value = str(column_value)
+            dynamic_dims.append({'Name': dimension_name, 'Value': dim_value})
+    
+    return dynamic_dims
+
+
 def collect_single_metric(
     config: MetricConfig,
     connection_pool: OracleConnectionPool,
@@ -867,6 +1006,7 @@ def collect_single_metric(
 ):
     """
     采集单个指标（线程安全，每个指标独立转换器）
+    支持单行和多行结果模式
     
     Args:
         config: 指标配置
@@ -877,51 +1017,114 @@ def collect_single_metric(
     
     try:
         if logger:
-            logger.debug(f"开始采集指标: {config.metric_name}")
+            logger.debug(f"开始采集指标: {config.metric_name}, 多行模式: {config.multi_row}")
         
-        # 执行SQL查询获取指标值（带超时保护）
-        raw_value = connection_pool.execute_query(
-            config.sql_query,
-            timeout=config.query_timeout
-        )
-        
-        if raw_value is None:
-            if logger:
-                logger.warning(f"指标查询返回None: {config.metric_name}, SQL: {config.sql_query[:100]}...")
-        
-        # 应用值转换器（如果存在）
-        # 注意：每个指标使用独立的转换器实例，不共享状态
-        if config.value_converter is None:
-            # 没有转换器，直接使用原始值
-            metric_value = raw_value if raw_value is not None else 0.0
-        elif isinstance(config.value_converter, MetricValueConverter):
-            # 使用转换器对象（支持聚合函数）
-            metric_value = config.value_converter.convert(raw_value, current_time)
-            if metric_value is None:
+        # 根据配置选择单行或多行查询
+        if config.multi_row:
+            # 多行模式：查询返回多行，每行发送一个独立的指标
+            rows, column_names = connection_pool.execute_query_multi(
+                config.sql_query,
+                timeout=config.query_timeout
+            )
+            
+            if not rows:
                 if logger:
-                    logger.debug(f"转换器返回None（可能需要更多数据点）: {config.metric_name}")
-                return  # 跳过无法转换的值（如rate/increase需要至少2个数据点）
-        elif callable(config.value_converter):
-            # 使用简单转换函数（向后兼容）
-            if raw_value is None:
-                metric_value = 0.0
-            else:
-                metric_value = config.value_converter(raw_value)
+                    logger.warning(f"多行查询返回空结果: {config.metric_name}, SQL: {config.sql_query[:100]}...")
+                return
+            
+            # 为每一行发送指标
+            metrics_sent = 0
+            for row in rows:
+                try:
+                    # 提取动态维度
+                    dynamic_dims = extract_dynamic_dimensions(row, config.dynamic_dimensions, column_names)
+                    
+                    # 合并静态维度和动态维度
+                    all_dimensions = merge_dimensions(config.dimensions, dynamic_dims)
+                    
+                    # 获取指标值（通常是最后一列，即COUNT(*)的结果）
+                    # 如果只有一列，使用该列；否则使用最后一列
+                    if len(row) == 1:
+                        raw_value = row[0]
+                    else:
+                        # 假设最后一列是数值（COUNT结果）
+                        raw_value = row[-1]
+                    
+                    # 应用值转换器（如果存在）
+                    if config.value_converter is None:
+                        metric_value = float(raw_value) if raw_value is not None else 0.0
+                    elif isinstance(config.value_converter, MetricValueConverter):
+                        metric_value = config.value_converter.convert(raw_value, current_time)
+                        if metric_value is None:
+                            continue  # 跳过无法转换的值
+                    elif callable(config.value_converter):
+                        metric_value = config.value_converter(raw_value) if raw_value is not None else 0.0
+                    else:
+                        metric_value = float(raw_value) if raw_value is not None else 0.0
+                    
+                    # 发送指标到CloudWatch
+                    cloudwatch_metrics.send_metric(
+                        metric_name=config.metric_name,
+                        value=metric_value,
+                        namespace=config.namespace,
+                        dimensions=all_dimensions,
+                        unit=config.unit
+                    )
+                    metrics_sent += 1
+                    
+                except Exception as e:
+                    if logger:
+                        logger.warning(f"处理多行结果中的一行时出错: {config.metric_name}, 错误: {e}")
+                    continue
+            
+            if logger:
+                logger.info(f"指标采集成功: {config.metric_name}, 发送了 {metrics_sent} 个指标")
+        
         else:
-            # 未知类型，使用原始值
-            metric_value = raw_value if raw_value is not None else 0.0
-        
-        # 发送指标到CloudWatch
-        cloudwatch_metrics.send_metric(
-            metric_name=config.metric_name,
-            value=metric_value,
-            namespace=config.namespace,
-            dimensions=config.dimensions,
-            unit=config.unit
-        )
-        
-        if logger:
-            logger.info(f"指标采集成功: {config.metric_name}={metric_value}")
+            # 单行模式：原有逻辑
+            raw_value = connection_pool.execute_query(
+                config.sql_query,
+                timeout=config.query_timeout
+            )
+            
+            if raw_value is None:
+                if logger:
+                    logger.warning(f"指标查询返回None: {config.metric_name}, SQL: {config.sql_query[:100]}...")
+            
+            # 应用值转换器（如果存在）
+            # 注意：每个指标使用独立的转换器实例，不共享状态
+            if config.value_converter is None:
+                # 没有转换器，直接使用原始值
+                metric_value = raw_value if raw_value is not None else 0.0
+            elif isinstance(config.value_converter, MetricValueConverter):
+                # 使用转换器对象（支持聚合函数）
+                metric_value = config.value_converter.convert(raw_value, current_time)
+                if metric_value is None:
+                    if logger:
+                        logger.debug(f"转换器返回None（可能需要更多数据点）: {config.metric_name}")
+                    return  # 跳过无法转换的值（如rate/increase需要至少2个数据点）
+            elif callable(config.value_converter):
+                # 使用简单转换函数（向后兼容）
+                if raw_value is None:
+                    metric_value = 0.0
+                else:
+                    metric_value = config.value_converter(raw_value)
+            else:
+                # 未知类型，使用原始值
+                metric_value = raw_value if raw_value is not None else 0.0
+            
+            # 发送指标到CloudWatch
+            cloudwatch_metrics.send_metric(
+                metric_name=config.metric_name,
+                value=metric_value,
+                namespace=config.namespace,
+                dimensions=config.dimensions,
+                unit=config.unit
+            )
+            
+            if logger:
+                logger.info(f"指标采集成功: {config.metric_name}={metric_value}")
+    
     except Exception as e:
         # 单个指标采集失败不影响其他指标
         if logger:

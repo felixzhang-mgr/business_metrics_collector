@@ -29,21 +29,24 @@ metrics:
     cron: "*/1 * * * *"  # 每分钟执行一次
     # query_timeout: 10  # 查询超时时间（秒），可选，不设置则使用默认值30秒
 
-  # 每小时卡授权交易笔数（固定窗口）：每小时整点执行，统计上一个完整小时的交易笔数
+  # 每小时卡授权交易笔数（固定窗口）：每小时整点执行，统计上一个完整小时的交易笔数，按RESPONSECODE分组
   - metric_name: HourlyTransactionCount
     sql_query: |
-      SELECT COUNT(*) 
+      SELECT RESPONSECODE, COUNT(*) 
       FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
       WHERE CREATETIME >= TRUNC(SYSDATE, 'HH24') - INTERVAL '1' HOUR
         AND CREATETIME < TRUNC(SYSDATE, 'HH24')
+      GROUP BY RESPONSECODE
     namespace: Paytend_Production
     dimensions: 
       - Name: team
         Value: Paytend
       - Name: business
         Value: TribeCardAuthorization
-    converter:
-      max_history_size: 1
+    multi_row: true  # 启用多行结果模式，每行按RESPONSECODE分组
+    dynamic_dimensions:
+      - column: RESPONSECODE  # 第一列（RESPONSECODE）
+        dimension_name: ResponseCode  # CloudWatch维度名称
     unit: Count  # Transactions Per Hour
     cron: "0 * * * *"  # 每小时整点执行一次
     # query_timeout: 30  # 查询超时时间（秒），可选
@@ -62,12 +65,37 @@ metrics:
         Value: Paytend
       - Name: business
         Value: TribeCardAuthorization
-    converter:
-      max_history_size: 1
     unit: Count
     cron: "*/5 * * * *"  # 每5分钟执行一次，用于及时告警
     # query_timeout: 30  # 查询超时时间（秒），可选
     # 告警建议：在Grafana中设置告警规则，当值 > 5 时触发告警
+
+  # 示例：多行结果和动态维度 - 按RESPONSECODE分组统计交易数
+  # - metric_name: TransactionCountByResponseCode
+  #   sql_query: |
+  #     SELECT RESPONSECODE, COUNT(*) 
+  #     FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
+  #     WHERE CREATETIME >= SYSDATE - INTERVAL '60' MINUTE
+  #     GROUP BY RESPONSECODE
+  #   namespace: Paytend_Production
+  #   dimensions: 
+  #     - Name: team
+  #       Value: Paytend
+  #     - Name: business
+  #       Value: TribeCardAuthorization
+  #   multi_row: true  # 启用多行结果模式
+  #   dynamic_dimensions:
+  #     - column: 0  # 第一列（RESPONSECODE），也可以使用列名 "RESPONSECODE"
+  #       dimension_name: ResponseCode  # CloudWatch维度名称
+  #   converter: null
+  #   unit: Count
+  #   cron: "*/5 * * * *"  # 每5分钟执行一次
+  #   说明：
+  #     - 查询返回多行，每行包含 RESPONSECODE 和 COUNT(*)
+  #     - 每行会发送一个独立的指标，维度中包含 ResponseCode=对应的值
+  #     - 例如：如果查询返回 ('05', 10) 和 ('06', 5)，会发送两个指标：
+  #       * TransactionCountByResponseCode, ResponseCode=05, Value=10
+  #       * TransactionCountByResponseCode, ResponseCode=06, Value=5
 
   # 示例：简单指标（直接使用SQL查询结果）
   # - metric_name: OracleActiveConnections
