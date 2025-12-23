@@ -12,8 +12,6 @@ database:
 common_dimensions:
   - Name: team
     Value: maintenance
-  - Name: InstanceId
-    Value: i-00c75580acea9167d
 
 # 指标配置列表
 metrics:
