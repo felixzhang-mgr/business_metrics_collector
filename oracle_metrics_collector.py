@@ -1288,8 +1288,59 @@ def run_periodic_check(config_file: str = 'metrics_config.yaml', log_file: Optio
     # 转换器注册表，用于保持转换器状态（历史数据）
     converter_registry: Dict[str, MetricValueConverter] = {}
     
-    # 调度器线程列表
+    # 调度器线程列表和锁（用于线程安全）
     scheduler_threads = []
+    scheduler_threads_lock = threading.Lock()
+    active_metric_names = set()  # 活跃的指标名称集合，用于检测新配置
+    
+    def start_scheduler_for_config(config: MetricConfig):
+        """为指定配置启动调度器线程"""
+        with scheduler_threads_lock:
+            # 检查是否已经启动
+            if config.metric_name in active_metric_names:
+                return False
+            
+            thread = threading.Thread(
+                target=run_single_metric_scheduler,
+                args=(config, connection_pool, cloudwatch_metrics, converter_registry, config_file),
+                daemon=True,
+                name=f"Scheduler-{config.metric_name}"
+            )
+            thread.start()
+            scheduler_threads.append(thread)
+            active_metric_names.add(config.metric_name)
+            logger.info(f"已启动指标调度器: {config.metric_name}")
+            return True
+    
+    def check_and_start_new_configs():
+        """检查配置文件中的新配置并启动对应的调度器"""
+        try:
+            new_configs = get_metric_configs(config_file)
+            new_configs = merge_metric_configs(new_configs, converter_registry)
+            
+            # 检查是否有新配置
+            new_configs_dict = {cfg.metric_name: cfg for cfg in new_configs}
+            with scheduler_threads_lock:
+                current_metric_names = active_metric_names.copy()
+            
+            # 找出新增的配置
+            new_metrics = set(new_configs_dict.keys()) - current_metric_names
+            
+            if new_metrics:
+                logger.info(f"检测到 {len(new_metrics)} 个新指标配置: {', '.join(new_metrics)}")
+                for metric_name in new_metrics:
+                    config = new_configs_dict[metric_name]
+                    start_scheduler_for_config(config)
+            
+            # 检查是否有被删除的配置（可选，记录日志）
+            removed_metrics = current_metric_names - set(new_configs_dict.keys())
+            if removed_metrics:
+                logger.info(f"检测到 {len(removed_metrics)} 个指标配置已从文件中移除: {', '.join(removed_metrics)}")
+                logger.info("这些指标的调度器将继续运行，直到程序重启")
+        
+        except Exception as e:
+            if logger:
+                logger.warning(f"检查新配置时出错: {e}")
     
     try:
         # 加载指标配置
@@ -1300,18 +1351,30 @@ def run_periodic_check(config_file: str = 'metrics_config.yaml', log_file: Optio
         
         # 为每个指标创建独立的调度器线程
         for config in metric_configs:
-            thread = threading.Thread(
-                target=run_single_metric_scheduler,
-                args=(config, connection_pool, cloudwatch_metrics, converter_registry, config_file),
-                daemon=True,
-                name=f"Scheduler-{config.metric_name}"
-            )
-            thread.start()
-            scheduler_threads.append(thread)
-            logger.info(f"已启动指标调度器: {config.metric_name}")
+            start_scheduler_for_config(config)
         
         logger.info(f"所有调度器已启动，共 {len(scheduler_threads)} 个指标")
         logger.info("=" * 60)
+        
+        # 启动配置监控线程（定期检查新配置）
+        def config_monitor():
+            """配置监控线程：定期检查新配置"""
+            while True:
+                try:
+                    time.sleep(60)  # 每60秒检查一次
+                    check_and_start_new_configs()
+                except Exception as e:
+                    if logger:
+                        logger.warning(f"配置监控线程出错: {e}")
+                    time.sleep(60)  # 出错后继续等待
+        
+        monitor_thread = threading.Thread(
+            target=config_monitor,
+            daemon=True,
+            name="ConfigMonitor"
+        )
+        monitor_thread.start()
+        logger.info("配置监控线程已启动，将定期检查新配置")
         
         # 等待所有调度器线程（实际上会一直运行）
         for thread in scheduler_threads:
