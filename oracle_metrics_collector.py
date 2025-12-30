@@ -1027,55 +1027,136 @@ def collect_single_metric(
                 timeout=config.query_timeout
             )
             
+            # 检查是否有 additional_aggregate_funcs 配置
+            aggregate_funcs = []
+            for dim_config in config.dynamic_dimensions:
+                funcs = dim_config.get('additional_aggregate_funcs', [])
+                if funcs:
+                    aggregate_funcs = funcs
+                    break
+            
+            # 收集所有行的值用于聚合计算
+            all_values = []
+            if rows:
+                for row in rows:
+                    try:
+                        # 获取指标值（通常是最后一列）
+                        if len(row) == 1:
+                            raw_value = row[0]
+                        else:
+                            raw_value = row[-1]
+                        
+                        # 转换为数值
+                        if raw_value is not None:
+                            try:
+                                value = float(raw_value)
+                                all_values.append(value)
+                            except (ValueError, TypeError):
+                                pass
+                    except Exception:
+                        continue
+            
+            # 如果 rows 为空，记录日志但不返回（继续处理聚合）
             if not rows:
                 if logger:
                     logger.warning(f"多行查询返回空结果: {config.metric_name}, SQL: {config.sql_query[:100]}...")
-                return
             
             # 为每一行发送指标
             metrics_sent = 0
-            for row in rows:
-                try:
-                    # 提取动态维度
-                    dynamic_dims = extract_dynamic_dimensions(row, config.dynamic_dimensions, column_names)
-                    
-                    # 合并静态维度和动态维度
-                    all_dimensions = merge_dimensions(config.dimensions, dynamic_dims)
-                    
-                    # 获取指标值（通常是最后一列，即COUNT(*)的结果）
-                    # 如果只有一列，使用该列；否则使用最后一列
-                    if len(row) == 1:
-                        raw_value = row[0]
-                    else:
-                        # 假设最后一列是数值（COUNT结果）
-                        raw_value = row[-1]
-                    
-                    # 应用值转换器（如果存在）
-                    if config.value_converter is None:
-                        metric_value = float(raw_value) if raw_value is not None else 0.0
-                    elif isinstance(config.value_converter, MetricValueConverter):
-                        metric_value = config.value_converter.convert(raw_value, current_time)
-                        if metric_value is None:
-                            continue  # 跳过无法转换的值
-                    elif callable(config.value_converter):
-                        metric_value = config.value_converter(raw_value) if raw_value is not None else 0.0
-                    else:
-                        metric_value = float(raw_value) if raw_value is not None else 0.0
-                    
-                    # 发送指标到CloudWatch
-                    cloudwatch_metrics.send_metric(
-                        metric_name=config.metric_name,
-                        value=metric_value,
-                        namespace=config.namespace,
-                        dimensions=all_dimensions,
-                        unit=config.unit
-                    )
-                    metrics_sent += 1
-                    
-                except Exception as e:
-                    if logger:
-                        logger.warning(f"处理多行结果中的一行时出错: {config.metric_name}, 错误: {e}")
-                    continue
+            if rows:
+                for row in rows:
+                    try:
+                        # 提取动态维度
+                        dynamic_dims = extract_dynamic_dimensions(row, config.dynamic_dimensions, column_names)
+                        
+                        # 合并静态维度和动态维度
+                        all_dimensions = merge_dimensions(config.dimensions, dynamic_dims)
+                        
+                        # 获取指标值（通常是最后一列，即COUNT(*)的结果）
+                        if len(row) == 1:
+                            raw_value = row[0]
+                        else:
+                            raw_value = row[-1]
+                        
+                        # 应用值转换器（如果存在）
+                        if config.value_converter is None:
+                            metric_value = float(raw_value) if raw_value is not None else 0.0
+                        elif isinstance(config.value_converter, MetricValueConverter):
+                            metric_value = config.value_converter.convert(raw_value, current_time)
+                            if metric_value is None:
+                                continue  # 跳过无法转换的值
+                        elif callable(config.value_converter):
+                            metric_value = config.value_converter(raw_value) if raw_value is not None else 0.0
+                        else:
+                            metric_value = float(raw_value) if raw_value is not None else 0.0
+                        
+                        # 发送指标到CloudWatch
+                        cloudwatch_metrics.send_metric(
+                            metric_name=config.metric_name,
+                            value=metric_value,
+                            namespace=config.namespace,
+                            dimensions=all_dimensions,
+                            unit=config.unit
+                        )
+                        metrics_sent += 1
+                        
+                    except Exception as e:
+                        if logger:
+                            logger.warning(f"处理多行结果中的一行时出错: {config.metric_name}, 错误: {e}")
+                        continue
+            
+            # 处理聚合函数（无论 rows 是否为空）
+            if aggregate_funcs:
+                # 计算聚合值
+                aggregate_results = {}
+                
+                if all_values and len(all_values) > 0:
+                    # 有数据时计算聚合
+                    if 'Total' in aggregate_funcs or 'SUM' in aggregate_funcs:
+                        aggregate_results['Total'] = sum(all_values)
+                    if 'Average' in aggregate_funcs or 'AVG' in aggregate_funcs:
+                        aggregate_results['Average'] = sum(all_values) / len(all_values)
+                    if 'Minimum' in aggregate_funcs or 'MIN' in aggregate_funcs:
+                        aggregate_results['Minimum'] = min(all_values)
+                    if 'Maximum' in aggregate_funcs or 'MAX' in aggregate_funcs:
+                        aggregate_results['Maximum'] = max(all_values)
+                else:
+                    # 没有数据时，所有聚合值默认为 0
+                    if 'Total' in aggregate_funcs or 'SUM' in aggregate_funcs:
+                        aggregate_results['Total'] = 0.0
+                    if 'Average' in aggregate_funcs or 'AVG' in aggregate_funcs:
+                        aggregate_results['Average'] = 0.0
+                    if 'Minimum' in aggregate_funcs or 'MIN' in aggregate_funcs:
+                        aggregate_results['Minimum'] = 0.0
+                    if 'Maximum' in aggregate_funcs or 'MAX' in aggregate_funcs:
+                        aggregate_results['Maximum'] = 0.0
+                
+                # 为每个聚合函数发送指标
+                for func_name, func_value in aggregate_results.items():
+                    try:
+                        # 创建聚合维度（包含 AggregateType 维度）
+                        aggregate_dims = [{'Name': 'AggregateType', 'Value': func_name}]
+                        
+                        # 合并静态维度和聚合维度
+                        all_dimensions = merge_dimensions(config.dimensions, aggregate_dims)
+                        
+                        # 发送聚合指标
+                        cloudwatch_metrics.send_metric(
+                            metric_name=config.metric_name,
+                            value=func_value,
+                            namespace=config.namespace,
+                            dimensions=all_dimensions,
+                            unit=config.unit
+                        )
+                        metrics_sent += 1
+                        
+                        if logger:
+                            logger.debug(f"发送聚合指标: {config.metric_name}, AggregateType={func_name}, Value={func_value}")
+                        
+                    except Exception as e:
+                        if logger:
+                            logger.warning(f"发送聚合指标失败: {config.metric_name}, {func_name}, 错误: {e}")
+                        continue
             
             if logger:
                 logger.info(f"指标采集成功: {config.metric_name}, 发送了 {metrics_sent} 个指标")

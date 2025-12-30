@@ -47,6 +47,7 @@ metrics:
     dynamic_dimensions:
       - column: RESPONSECODE  # 第一列（RESPONSECODE）
         dimension_name: ResponseCode  # CloudWatch维度名称
+        additional_aggregate_funcs: ['Total','Average','Minimum','Maximum']
     unit: Count  # Transactions Per Hour
     cron: "0 * * * *"  # 每小时整点执行一次
     # query_timeout: 30  # 查询超时时间（秒），可选
