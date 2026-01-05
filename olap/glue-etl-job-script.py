@@ -113,7 +113,7 @@ df_final.write \
     .mode("overwrite") \
     .option("compression", "snappy") \
     .partitionBy("dt") \
-    .parquet(S3_OUT)
+      .parquet(S3_OUT)
 
 log(f"S3 write completed in {time.time() - write_t0:.2f}s")
 

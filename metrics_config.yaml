@@ -88,6 +88,24 @@ metrics:
     cron: "*/5 * * * *"  # 每5分钟执行一次，用于及时告警
     # 告警建议：在Grafana中设置告警规则，当值 > 5 时触发告警
 
+  # 卡授权交易异常监控（滑动窗口）：每5分钟执行一次，查询过去1小时的交易异常数，用于实时告警
+  - metric_name: AbnormalSEPA
+    sql_query: |
+      SELECT COUNT(*) 
+      FROM PAYTEND.TBL_TRADE
+      WHERE PAYMENTTYPE = 2
+        AND TXSTEP = 10 
+        AND CREATEDATE >= SYSDATE - INTERVAL '60' MINUTE
+    namespace: Paytend_Production
+    dimensions: 
+      - Name: team
+        Value: Paytend
+      - Name: business
+        Value: SEPA
+    unit: Count
+    cron: "*/5 * * * *"  # 每5分钟执行一次，用于及时告警
+    # 告警建议：在Grafana中设置告警规则，当值 > 5 时触发告警
+
   # 示例：多行结果和动态维度 - 按RESPONSECODE分组统计交易数
   # - metric_name: TransactionCountByResponseCode
   #   sql_query: |
