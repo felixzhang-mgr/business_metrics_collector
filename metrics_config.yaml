@@ -77,6 +77,7 @@ metrics:
       SELECT COUNT(*) 
       FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
       WHERE RESPONSECODE = '05' 
+        AND NOTE <> 'TAI request timeout' 
         AND CREATETIME >= SYSDATE - INTERVAL '60' MINUTE
     namespace: Paytend_Production
     dimensions: 
