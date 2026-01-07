@@ -32,11 +32,20 @@ metrics:
   # 每小时卡授权交易笔数（固定窗口）：每小时整点执行，统计上一个完整小时的交易笔数，按RESPONSECODE分组
   - metric_name: HourlyTransactionCount
     sql_query: |
-      SELECT RESPONSECODE, COUNT(*) 
+      SELECT 
+          CASE 
+              WHEN NOTE = 'TAI request timeout' THEN RESPONSECODE || ' Timeout'
+              ELSE RESPONSECODE
+          END AS RESPONSECODE,
+          COUNT(*) 
       FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
       WHERE CREATETIME >= TRUNC(SYSDATE, 'HH24') - INTERVAL '1' HOUR
         AND CREATETIME < TRUNC(SYSDATE, 'HH24')
-      GROUP BY RESPONSECODE
+      GROUP BY 
+          CASE 
+              WHEN NOTE = 'TAI request timeout' THEN RESPONSECODE || ' Timeout'
+              ELSE RESPONSECODE
+          END
     namespace: Paytend_Production
     dimensions: 
       - Name: team
