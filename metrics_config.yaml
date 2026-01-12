@@ -33,19 +33,13 @@ metrics:
   - metric_name: HourlyTransactionCount
     sql_query: |
       SELECT 
-          CASE 
-              WHEN NOTE = 'TAI request timeout' THEN RESPONSECODE || ' Timeout'
-              ELSE RESPONSECODE
-          END AS RESPONSECODE,
+          RESPONSECODE,
           COUNT(*) 
       FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
       WHERE CREATETIME >= TRUNC(SYSDATE, 'HH24') - INTERVAL '1' HOUR
         AND CREATETIME < TRUNC(SYSDATE, 'HH24')
       GROUP BY 
-          CASE 
-              WHEN NOTE = 'TAI request timeout' THEN RESPONSECODE || ' Timeout'
-              ELSE RESPONSECODE
-          END
+          RESPONSECODE
     namespace: Paytend_Production
     dimensions: 
       - Name: team
@@ -67,7 +61,7 @@ metrics:
       SELECT COUNT(*) 
       FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
       WHERE RESPONSECODE = '05' 
-        AND NOTE = 'TAI request timeout' 
+        AND NOTE LIKE '%TAI request timeout%' 
         AND CREATETIME >= SYSDATE - INTERVAL '60' MINUTE
     namespace: Paytend_Production
     dimensions: 
@@ -86,7 +80,7 @@ metrics:
       SELECT COUNT(*) 
       FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
       WHERE RESPONSECODE = '05' 
-        AND NOTE <> 'TAI request timeout' 
+        AND NOTE NOT LIKE '%TAI request timeout%' 
         AND CREATETIME >= SYSDATE - INTERVAL '60' MINUTE
     namespace: Paytend_Production
     dimensions: 
