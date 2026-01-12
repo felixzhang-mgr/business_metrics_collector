@@ -16,7 +16,8 @@ common_dimensions:
 # 指标配置列表
 metrics:
   # EC2OracleAlive指标：检查数据库存活性
-  - metric_name: EC2OracleAlive
+  - id: ec2-oracle-alive-001
+    metric_name: EC2OracleAlive
     sql_query: SELECT 1 FROM DUAL
     namespace: Paytend_Production
     dimensions: 
@@ -30,7 +31,8 @@ metrics:
     # query_timeout: 10  # 查询超时时间（秒），可选，不设置则使用默认值30秒
 
   # 每小时卡授权交易笔数（固定窗口）：每小时整点执行，统计上一个完整小时的交易笔数，按RESPONSECODE分组
-  - metric_name: HourlyTransactionCount
+  - id: hourly-transaction-count-001
+    metric_name: HourlyTransactionCount
     sql_query: |
       SELECT 
           RESPONSECODE,
@@ -56,7 +58,8 @@ metrics:
     # query_timeout: 30  # 查询超时时间（秒），可选
 
   # 超时卡授权交易监控（滑动窗口）：每5分钟执行一次，查询过去1小时的超时交易数，用于实时告警
-  - metric_name: TimeoutTransactionCount
+  - id: timeout-transaction-count-001
+    metric_name: TimeoutTransactionCount
     sql_query: |
       SELECT COUNT(*) 
       FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
@@ -75,7 +78,8 @@ metrics:
     # 告警建议：在Grafana中设置告警规则，当值 > 5 时触发告警
 
   # 卡授权交易异常监控（滑动窗口）：每5分钟执行一次，查询过去1小时的交易异常数，用于实时告警
-  - metric_name: AbnormalTransactionCount
+  - id: abnormal-transaction-count-001
+    metric_name: AbnormalTransactionCount
     sql_query: |
       SELECT COUNT(*) 
       FROM PAYTEND.TBL_TRIBECARDAUTHORIZATION 
@@ -92,8 +96,9 @@ metrics:
     cron: "*/5 * * * *"  # 每5分钟执行一次，用于及时告警
     # 告警建议：在Grafana中设置告警规则，当值 > 5 时触发告警
 
-  # 卡授权交易异常监控（滑动窗口）：每5分钟执行一次，查询过去1小时的交易异常数，用于实时告警
-  - metric_name: AbnormalSEPA
+  # 卡授权交易异常监控（滑动窗口）：每5分钟执行一次，查询过去1小时的异常SEPA数，用于实时告警
+  - id: abnormal-sepa-001
+    metric_name: AbnormalTransactionCount
     sql_query: |
       SELECT COUNT(*) 
       FROM PAYTEND.TBL_TRADE

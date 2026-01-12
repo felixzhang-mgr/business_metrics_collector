@@ -318,6 +318,7 @@ class MetricConfig:
     
     def __init__(
         self,
+        id: str,
         metric_name: str,
         sql_query: str,
         namespace: str,
@@ -333,6 +334,7 @@ class MetricConfig:
         初始化指标配置
         
         Args:
+            id: 指标配置的唯一标识符（必需）
             metric_name: CloudWatch指标名称
             sql_query: 用于采集指标的SQL查询，应返回单个数值（单行模式）或多行结果（多行模式）
             namespace: CloudWatch命名空间
@@ -349,6 +351,7 @@ class MetricConfig:
                 格式: [{"column": 0, "dimension_name": "ResponseCode"}, ...]
                 column可以是列索引（0-based）或列名
         """
+        self.id = id
         self.metric_name = metric_name
         self.sql_query = sql_query
         self.namespace = namespace
@@ -867,8 +870,38 @@ def get_metric_configs(config_file: str = 'metrics_config.yaml') -> List[MetricC
     # 解析指标配置
     metrics_config = config_data.get('metrics', [])
     configs = []
+    seen_ids = set()  # 用于检查 id 重复
+    auto_generated_count = {}  # 用于自动生成 id 时的计数
     
-    for metric in metrics_config:
+    for index, metric in enumerate(metrics_config):
+        # 获取或生成 id
+        metric_id = metric.get('id')
+        if not metric_id:
+            # 自动生成 id（基于 metric_name + 索引）
+            metric_name = metric.get('metric_name', f'metric_{index}')
+            if metric_name not in auto_generated_count:
+                auto_generated_count[metric_name] = 0
+            auto_generated_count[metric_name] += 1
+            metric_id = f"{metric_name.lower().replace(' ', '-')}-{auto_generated_count[metric_name]:03d}"
+            if logger:
+                logger.warning(f"指标配置缺少 id 字段，已自动生成: {metric_id} (metric_name: {metric_name})")
+                logger.warning("建议在配置文件中显式指定 id 字段以避免冲突")
+        
+        # 验证 id 不为空
+        if not metric_id or not metric_id.strip():
+            error_msg = f"指标配置的 id 字段不能为空（索引: {index}, metric_name: {metric.get('metric_name', 'unknown')}）"
+            if logger:
+                logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        # 检查 id 是否重复
+        if metric_id in seen_ids:
+            error_msg = f"检测到重复的 id: {metric_id} (metric_name: {metric.get('metric_name', 'unknown')})"
+            if logger:
+                logger.error(error_msg)
+            raise ValueError(error_msg)
+        seen_ids.add(metric_id)
+        
         # 获取自定义维度并合并
         custom_dimensions = metric.get('dimensions', [])
         dimensions = merge_dimensions(common_dimensions, custom_dimensions)
@@ -893,6 +926,7 @@ def get_metric_configs(config_file: str = 'metrics_config.yaml') -> List[MetricC
         
         # 创建指标配置
         config = MetricConfig(
+            id=metric_id,
             metric_name=metric['metric_name'],
             sql_query=metric['sql_query'],
             namespace=metric['namespace'],
@@ -919,7 +953,7 @@ def merge_metric_configs(
     
     Args:
         new_configs: 新获取的指标配置列表
-        converter_registry: 转换器注册表，以指标名称为key
+        converter_registry: 转换器注册表，以指标id为key
         
     Returns:
         List[MetricConfig]: 合并后的指标配置列表（保持转换器状态）
@@ -930,24 +964,24 @@ def merge_metric_configs(
         # 如果配置中有转换器且是MetricValueConverter类型
         if isinstance(config.value_converter, MetricValueConverter):
             # 检查是否已有该指标的转换器实例
-            if config.metric_name in converter_registry:
+            if config.id in converter_registry:
                 # 复用已有的转换器实例（保持历史数据）
                 # 注意：每个指标独立转换器，不共享
-                config.value_converter = converter_registry[config.metric_name]
+                config.value_converter = converter_registry[config.id]
             else:
                 # 创建新的转换器实例并注册
-                converter_registry[config.metric_name] = config.value_converter
+                converter_registry[config.id] = config.value_converter
         
         merged_configs.append(config)
     
     # 清理不再存在的指标的转换器（节省内存）
-    existing_metric_names = {config.metric_name for config in new_configs}
+    existing_metric_ids = {config.id for config in new_configs}
     metrics_to_remove = [
-        name for name in converter_registry.keys()
-        if name not in existing_metric_names
+        metric_id for metric_id in converter_registry.keys()
+        if metric_id not in existing_metric_ids
     ]
-    for name in metrics_to_remove:
-        del converter_registry[name]
+    for metric_id in metrics_to_remove:
+        del converter_registry[metric_id]
     
     return merged_configs
 
@@ -1017,7 +1051,7 @@ def collect_single_metric(
     
     try:
         if logger:
-            logger.debug(f"开始采集指标: {config.metric_name}, 多行模式: {config.multi_row}")
+            logger.debug(f"开始采集指标: [{config.id}] {config.metric_name}, 多行模式: {config.multi_row}")
         
         # 根据配置选择单行或多行查询
         if config.multi_row:
@@ -1059,7 +1093,7 @@ def collect_single_metric(
             # 如果 rows 为空，记录日志但不返回（继续处理聚合）
             if not rows:
                 if logger:
-                    logger.warning(f"多行查询返回空结果: {config.metric_name}, SQL: {config.sql_query[:100]}...")
+                    logger.warning(f"多行查询返回空结果: [{config.id}] {config.metric_name}, SQL: {config.sql_query[:100]}...")
             
             # 为每一行发送指标
             metrics_sent = 0
@@ -1102,7 +1136,7 @@ def collect_single_metric(
                         
                     except Exception as e:
                         if logger:
-                            logger.warning(f"处理多行结果中的一行时出错: {config.metric_name}, 错误: {e}")
+                            logger.warning(f"处理多行结果中的一行时出错: [{config.id}] {config.metric_name}, 错误: {e}")
                         continue
             
             # 处理聚合函数（无论 rows 是否为空）
@@ -1151,15 +1185,15 @@ def collect_single_metric(
                         metrics_sent += 1
                         
                         if logger:
-                            logger.debug(f"发送聚合指标: {config.metric_name}, AggregateType={func_name}, Value={func_value}")
+                            logger.debug(f"发送聚合指标: [{config.id}] {config.metric_name}, AggregateType={func_name}, Value={func_value}")
                         
                     except Exception as e:
                         if logger:
-                            logger.warning(f"发送聚合指标失败: {config.metric_name}, {func_name}, 错误: {e}")
+                            logger.warning(f"发送聚合指标失败: [{config.id}] {config.metric_name}, {func_name}, 错误: {e}")
                         continue
             
             if logger:
-                logger.info(f"指标采集成功: {config.metric_name}, 发送了 {metrics_sent} 个指标")
+                logger.info(f"指标采集成功: [{config.id}] {config.metric_name}, 发送了 {metrics_sent} 个指标")
         
         else:
             # 单行模式：原有逻辑
@@ -1170,7 +1204,7 @@ def collect_single_metric(
             
             if raw_value is None:
                 if logger:
-                    logger.warning(f"指标查询返回None: {config.metric_name}, SQL: {config.sql_query[:100]}...")
+                    logger.warning(f"指标查询返回None: [{config.id}] {config.metric_name}, SQL: {config.sql_query[:100]}...")
             
             # 应用值转换器（如果存在）
             # 注意：每个指标使用独立的转换器实例，不共享状态
@@ -1182,7 +1216,7 @@ def collect_single_metric(
                 metric_value = config.value_converter.convert(raw_value, current_time)
                 if metric_value is None:
                     if logger:
-                        logger.debug(f"转换器返回None（可能需要更多数据点）: {config.metric_name}")
+                        logger.debug(f"转换器返回None（可能需要更多数据点）: [{config.id}] {config.metric_name}")
                     return  # 跳过无法转换的值（如rate/increase需要至少2个数据点）
             elif callable(config.value_converter):
                 # 使用简单转换函数（向后兼容）
@@ -1204,12 +1238,12 @@ def collect_single_metric(
             )
             
             if logger:
-                logger.info(f"指标采集成功: {config.metric_name}={metric_value}")
+                logger.info(f"指标采集成功: [{config.id}] {config.metric_name}={metric_value}")
     
     except Exception as e:
         # 单个指标采集失败不影响其他指标
         if logger:
-            logger.error(f"指标采集失败: {config.metric_name}, 错误: {e}", exc_info=True)
+            logger.error(f"指标采集失败: [{config.id}] {config.metric_name}, 错误: {e}", exc_info=True)
 
 
 def run_single_metric_scheduler(
@@ -1232,7 +1266,7 @@ def run_single_metric_scheduler(
     # 验证cron表达式
     if not validate_cron_expression(config.cron_expr):
         if logger:
-            logger.error(f"指标 {config.metric_name} 的cron表达式无效: {config.cron_expr}")
+            logger.error(f"指标 [{config.id}] {config.metric_name} 的cron表达式无效: {config.cron_expr}")
             logger.error("Cron表达式格式：分 时 日 月 周")
             logger.error("示例：*/1 * * * * (每分钟), */5 * * * * (每5分钟), 0 * * * * (每小时)")
         return
@@ -1242,7 +1276,7 @@ def run_single_metric_scheduler(
     
     try:
         if logger:
-            logger.info(f"启动指标调度器: {config.metric_name}, cron={config.cron_expr}")
+            logger.info(f"启动指标调度器: [{config.id}] {config.metric_name}, cron={config.cron_expr}")
         
         # 首次立即执行一次采集
         collect_single_metric(config, connection_pool, cloudwatch_metrics)
@@ -1260,44 +1294,44 @@ def run_single_metric_scheduler(
             # 如果等待时间大于0，则等待
             if wait_seconds > 0:
                 if logger:
-                    logger.debug(f"指标 {config.metric_name} 等待 {wait_seconds:.1f}秒后执行")
+                    logger.debug(f"指标 [{config.id}] {config.metric_name} 等待 {wait_seconds:.1f}秒后执行")
                 time.sleep(wait_seconds)
             
             # 重新加载配置（支持动态配置更新）
             try:
                 new_configs = get_metric_configs(config_file)
-                # 使用字典查找提高效率
-                config_dict = {cfg.metric_name: cfg for cfg in new_configs}
-                updated_config = config_dict.get(config.metric_name)
+                # 使用字典查找提高效率（使用 id 作为 key）
+                config_dict = {cfg.id: cfg for cfg in new_configs}
+                updated_config = config_dict.get(config.id)
                 
                 if updated_config:
                     # 更新配置但保持转换器状态
                     if isinstance(updated_config.value_converter, MetricValueConverter):
-                        if config.metric_name in converter_registry:
-                            updated_config.value_converter = converter_registry[config.metric_name]
+                        if config.id in converter_registry:
+                            updated_config.value_converter = converter_registry[config.id]
                         else:
-                            converter_registry[config.metric_name] = updated_config.value_converter
+                            converter_registry[config.id] = updated_config.value_converter
                     
                     # 更新cron表达式（如果改变）
                     old_cron_expr = config.cron_expr
                     config = updated_config
                     if config.cron_expr != old_cron_expr:
                         if logger:
-                            logger.info(f"指标 {config.metric_name} cron表达式已更新: {old_cron_expr} -> {config.cron_expr}")
+                            logger.info(f"指标 [{config.id}] {config.metric_name} cron表达式已更新: {old_cron_expr} -> {config.cron_expr}")
                         cron = croniter(config.cron_expr, datetime.now())
             except Exception as e:
                 if logger:
-                    logger.warning(f"配置加载失败，继续使用旧配置: {config.metric_name}, 错误: {e}")
+                    logger.warning(f"配置加载失败，继续使用旧配置: [{config.id}] {config.metric_name}, 错误: {e}")
             
             # 执行指标采集
             collect_single_metric(config, connection_pool, cloudwatch_metrics)
             
     except KeyboardInterrupt:
         if logger:
-            logger.info(f"指标调度器停止: {config.metric_name}")
+            logger.info(f"指标调度器停止: [{config.id}] {config.metric_name}")
     except Exception as e:
         if logger:
-            logger.error(f"指标调度器异常退出: {config.metric_name}, 错误: {e}", exc_info=True)
+            logger.error(f"指标调度器异常退出: [{config.id}] {config.metric_name}, 错误: {e}", exc_info=True)
 
 
 def run_periodic_check(config_file: str = 'metrics_config.yaml', log_file: Optional[str] = None, log_level: str = 'INFO'):
@@ -1372,25 +1406,25 @@ def run_periodic_check(config_file: str = 'metrics_config.yaml', log_file: Optio
     # 调度器线程列表和锁（用于线程安全）
     scheduler_threads = []
     scheduler_threads_lock = threading.Lock()
-    active_metric_names = set()  # 活跃的指标名称集合，用于检测新配置
+    active_metric_ids = set()  # 活跃的指标ID集合，用于检测新配置
     
     def start_scheduler_for_config(config: MetricConfig):
         """为指定配置启动调度器线程"""
         with scheduler_threads_lock:
             # 检查是否已经启动
-            if config.metric_name in active_metric_names:
+            if config.id in active_metric_ids:
                 return False
             
             thread = threading.Thread(
                 target=run_single_metric_scheduler,
                 args=(config, connection_pool, cloudwatch_metrics, converter_registry, config_file),
                 daemon=True,
-                name=f"Scheduler-{config.metric_name}"
+                name=f"Scheduler-{config.id}"
             )
             thread.start()
             scheduler_threads.append(thread)
-            active_metric_names.add(config.metric_name)
-            logger.info(f"已启动指标调度器: {config.metric_name}")
+            active_metric_ids.add(config.id)
+            logger.info(f"已启动指标调度器: [{config.id}] {config.metric_name}")
             return True
     
     def check_and_start_new_configs():
@@ -1399,24 +1433,25 @@ def run_periodic_check(config_file: str = 'metrics_config.yaml', log_file: Optio
             new_configs = get_metric_configs(config_file)
             new_configs = merge_metric_configs(new_configs, converter_registry)
             
-            # 检查是否有新配置
-            new_configs_dict = {cfg.metric_name: cfg for cfg in new_configs}
+            # 检查是否有新配置（使用 id 作为 key）
+            new_configs_dict = {cfg.id: cfg for cfg in new_configs}
             with scheduler_threads_lock:
-                current_metric_names = active_metric_names.copy()
+                current_metric_ids = active_metric_ids.copy()
             
             # 找出新增的配置
-            new_metrics = set(new_configs_dict.keys()) - current_metric_names
+            new_metric_ids = set(new_configs_dict.keys()) - current_metric_ids
             
-            if new_metrics:
-                logger.info(f"检测到 {len(new_metrics)} 个新指标配置: {', '.join(new_metrics)}")
-                for metric_name in new_metrics:
-                    config = new_configs_dict[metric_name]
+            if new_metric_ids:
+                new_metric_names = [f"[{cfg.id}] {cfg.metric_name}" for cfg in [new_configs_dict[mid] for mid in new_metric_ids]]
+                logger.info(f"检测到 {len(new_metric_ids)} 个新指标配置: {', '.join(new_metric_names)}")
+                for metric_id in new_metric_ids:
+                    config = new_configs_dict[metric_id]
                     start_scheduler_for_config(config)
             
             # 检查是否有被删除的配置（可选，记录日志）
-            removed_metrics = current_metric_names - set(new_configs_dict.keys())
-            if removed_metrics:
-                logger.info(f"检测到 {len(removed_metrics)} 个指标配置已从文件中移除: {', '.join(removed_metrics)}")
+            removed_metric_ids = current_metric_ids - set(new_configs_dict.keys())
+            if removed_metric_ids:
+                logger.info(f"检测到 {len(removed_metric_ids)} 个指标配置已从文件中移除: {', '.join(removed_metric_ids)}")
                 logger.info("这些指标的调度器将继续运行，直到程序重启")
         
         except Exception as e:
