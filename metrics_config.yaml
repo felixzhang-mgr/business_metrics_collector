@@ -34,7 +34,7 @@ metrics:
     sql_query: |
       SELECT 
           CASE 
-              WHEN NOTE = 'TAI request timeout' THEN RESPONSECODE || ' Timeout'
+              WHEN NOTE LIKE '%TAI request timeout%' THEN RESPONSECODE || ' Timeout'
               ELSE RESPONSECODE
           END AS RESPONSECODE,
           COUNT(*) 
@@ -43,7 +43,7 @@ metrics:
         AND CREATETIME < TRUNC(SYSDATE, 'HH24')
       GROUP BY 
           CASE 
-              WHEN NOTE = 'TAI request timeout' THEN RESPONSECODE || ' Timeout'
+              WHEN NOTE LIKE '%TAI request timeout%' THEN RESPONSECODE || ' Timeout'
               ELSE RESPONSECODE
           END
     namespace: Paytend_Production

@@ -1,0 +1,48 @@
+{
+    "rules": [
+        {
+            "rule-id": 2048868916,
+            "rule-name": "mj9vmcbg-lyk7x6",
+            "rule-type": "selection",
+            "rule-action": "include",
+            "object-locator": {
+                "schema-name": "PAYTEND",
+                "table-name": "TBL_TRIBECARDAUTHORIZATION"
+            },
+            "filters": []
+        },
+        {
+            "rule-id": 3390996,
+            "rule-name": "mj9vnfqh-cajnsk",
+            "rule-type": "selection",
+            "rule-action": "include",
+            "object-locator": {
+                "schema-name": "PAYTEND",
+                "table-name": "TBL_TRADE"
+            },
+            "filters": []
+        },
+        {
+            "rule-id": 37377646,
+            "rule-name": "mj9vnstd-0j0kbo",
+            "rule-type": "selection",
+            "rule-action": "include",
+            "object-locator": {
+                "schema-name": "PAYTEND",
+                "table-name": "TBL_USER"
+            },
+            "filters": []
+        },
+        {
+            "rule-id": 982932666,
+            "rule-name": "mjc6rv81-yo65k1",
+            "rule-type": "selection",
+            "rule-action": "include",
+            "object-locator": {
+                "schema-name": "PAYTEND",
+                "table-name": "TBL_INVENTI_WEBHOOK_LOG"
+            },
+            "filters": []
+        }
+    ]
+}
